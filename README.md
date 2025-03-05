@@ -2,7 +2,7 @@
 
 Simple scripts to perform bulk sentiment analysis using an ensemble approach
 
-# [`classify_db.py`](./classify_db.py)
+## [`classify_db.py`](./classify_db.py)
 
 This script expects one CLI arg that is a path to a JSON file with the following schema:
 
