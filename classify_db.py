@@ -1,4 +1,5 @@
 import os, uuid, json, sys
+import datetime as dt
 import psycopg2 as ps
 import polars as pl
 from getpass import getpass
@@ -151,7 +152,8 @@ def main(config):
                     "bertweet_classification",
                 )
                 .map_elements(final_score, return_dtype=str)
-                .alias("majority_class")
+                .alias("majority_class"),
+                pl.lit(dt.datetime.now()).alias("predicted_at"),
             ).drop(
                 [config["text_col"], "text"]
             ).write_ipc(
