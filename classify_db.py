@@ -40,14 +40,21 @@ def main(config):
     else:
         # Skip previously-classified data for this run
         df_list = [
-            pl.read_ipc(f, columns=config["id_col"])
+            pl.read_ipc(
+                os.getenv("DATA_DIR")
+                + config["output_parent_dir"]
+                + "/"
+                + config["run_id"]
+                + "/"
+                + f,
+                columns=config["id_col"],
+            )
             for f in os.listdir(
                 os.getenv("DATA_DIR") + config["output_parent_dir"] + "/" + config["run_id"]
             )
         ]
         skip_these = tuple(pl.concat(df_list)[config["id_col"]].unique()) if len(df_list) else ()
-        if len(skip_these):
-            query += " and " + config["id_col"] + " not in %s"
+        del df_list
 
     # We use the same VADER object for all data
     vader_analyzer = SentimentIntensityAnalyzer()
@@ -57,21 +64,32 @@ def main(config):
 
     with pg_conn.cursor() as cursor:
         # Get first batch to start iteration
-        cursor.execute(query, (skip_these,)) if len(skip_these) else cursor.execute(query)
+        cursor.execute(query)
         results = cursor.fetchmany(config["fetch_size"])
 
         # Stop iterating when there are no more database results
         while len(results) > 0:
 
-            df = pl.DataFrame(
-                results, schema=[config["id_col"], config["text_col"]], orient="row"
-            ).with_columns(pl.col(config["text_col"]).str.replace_all(URL_REGEX, "").alias("text"))
+            df = (
+                pl.DataFrame(results, schema=[config["id_col"], config["text_col"]], orient="row")
+                .with_columns(
+                    pl.col(config["text_col"]).str.replace_all(URL_REGEX, "").alias("text")
+                )
+                .filter(~pl.col(config["id_col"]).is_in(skip_these))
+            )
+
+            # If there's nothing to classify, skip to the next batch
+            if df.shape[0] == 0:
+                del df
+                results = cursor.fetchmany(config["fetch_size"])
+                continue
+
             ds = Dataset.from_polars(df.drop(config["text_col"]))
 
             # Classify rows
             v_class, v_score = [], []
-            for row in tqdm(results, desc="VADER"):
-                v_results = vader_analyzer.polarity_scores(row[-1])
+            for row in tqdm(df.iter_rows(named=True), desc="VADER"):
+                v_results = vader_analyzer.polarity_scores(row[config["id_col"]])
                 if v_results["compound"] >= 0.05:
                     v_class.append("positive")
                 elif v_results["compound"] <= -0.05:
